@@ -2,8 +2,8 @@
 
 Usage:
   buster.py setup [--gh-repo=<repo-url>] [--dir=<path>]
-  buster.py generate [--domain=<local-address>] [--dir=<path>]
-  buster.py preview [--dir=<path>]
+  buster.py generate [--domain=<local-address>] [--dir=<path>] [--target_domain=<http://your-host-here>]
+  buster.py preview [--dir=<path>] [--port=<port>]
   buster.py deploy [--dir=<path>]
   buster.py add-domain <domain-name> [--dir=<path>]
   buster.py (-h | --help)
@@ -19,6 +19,7 @@ Options:
 
 import os
 import re
+import string
 import sys
 import fnmatch
 import shutil
@@ -48,6 +49,12 @@ def main():
                    "--restrict-file-name=unix "  # don't escape query string
                    "{0}").format(arguments['--domain'], static_path)
         os.system(command)
+        
+        if arguments['--domain']:
+          domain = arguments['--domain']
+        else:
+          domain = 'http://localhost:2368'
+        target_domain = arguments['--target_domain']
 
         # remove query string since Ghost 0.4
         file_regex = re.compile(r'.*?(\?.*)')
@@ -65,7 +72,12 @@ def main():
             for element in d('a'):
                 e = PyQuery(element)
                 href = e.attr('href')
-                if not abs_url_regex.search(href):
+                if href:
+                    if href.find(domain) > -1:
+                        new_href = href.split(domain)[-1]
+                        e.attr('href', new_href)
+                        print "\t", "Fixed ", href ,"=> ", new_href
+                if href and not abs_url_regex.search(href):
                     new_href = re.sub(r'rss/index\.html$', 'rss/index.rss', href)
                     new_href = re.sub(r'/index\.html$', '/', new_href)
                     e.attr('href', new_href)
@@ -73,7 +85,74 @@ def main():
             if parser == 'html':
                 return d.html(method='html').encode('utf8')
             return d.__unicode__().encode('utf8')
+            
+        def fix_share_links(text,parser):
+            filetext = text.decode('utf8')
+            td_regex = re.compile(target_domain + '|' )
+            
+            assert target_domain, "target domain must be specified --target_domain=<http://your-host-url>"
+            d = PyQuery(bytes(bytearray(filetext, encoding='utf-8')), parser=parser)
+            for share_class in ['.share_links a']:
+                print "share_class : ", share_class
+                for element in d(share_class):
+                    e = PyQuery(element)
+                    print "element : ", e
+                    href = e.attr('href')
+                    print "href : ", href
+                    print "domain : ", domain
+                    print "target_domain : ", target_domain
+                    new_href = re.sub(domain, target_domain, href)
+                    e.attr('href', new_href)
+                    print "\t", href, "=>", new_href
+            if parser == 'html':
+                return d.html(method='html').encode('utf8')
+            return d.__unicode__().encode('utf8')
+           
+        def fix_meta_url_links(text,parser):
+            filetext = text.decode('utf8')
+            td_regex = re.compile(target_domain + '|' )
+            
+            assert target_domain, "target domain must be specified --target_domain=<http://your-host-url>"
+            d = PyQuery(bytes(bytearray(filetext, encoding='utf-8')), parser=parser)
+            for share_class in ['meta[property="og:url"], meta[name="twitter:url"]']:
+                print "share_class : ", share_class
+                for element in d(share_class):
+                    e = PyQuery(element)
+                    print "element : ", e
+                    href = e.attr('content')
+                    print "href : ", href
+                    print "domain : ", domain
+                    print "target_domain : ", target_domain
+                    new_href = re.sub(domain, target_domain, href)
+                    e.attr('content', new_href)
+                    print "\t", href, "=>", new_href
+            if parser == 'html':
+                return d.html(method='html').encode('utf8')
+            return d.__unicode__().encode('utf8')
 
+        def fix_meta_image_links(text,parser):
+            filetext = text.decode('utf8')
+            td_regex = re.compile(target_domain + '|' )
+            
+            assert target_domain, "target domain must be specified --target_domain=<http://your-host-url>"
+            d = PyQuery(bytes(bytearray(filetext, encoding='utf-8')), parser=parser)
+            for share_class in ['meta[property="og:image"], meta[name="twitter:image"]']:
+                print "share_class : ", share_class
+                for element in d(share_class):
+                    e = PyQuery(element)
+                    print "element : ", e
+                    href = e.attr('content')
+                    print "href : ", href
+                    print "domain : ", domain
+                    content_target_domain = target_domain.replace("/static", "")
+                    print "target_domain : ", content_target_domain
+                    new_href = re.sub(domain, content_target_domain, href)
+                    e.attr('content', new_href)
+                    print "\t", href, "=>", new_href
+            if parser == 'html':
+                return d.html(method='html').encode('utf8')
+            return d.__unicode__().encode('utf8')
+            
         # fix links in all html files
         for root, dirs, filenames in os.walk(static_path):
             for filename in fnmatch.filter(filenames, "*.html"):
@@ -88,6 +167,9 @@ def main():
                     filetext = f.read().decode('utf8')
                 print "fixing links in ", filepath
                 newtext = fixLinks(filetext, parser)
+                newtext = fix_share_links(newtext,parser)
+                newtext = fix_meta_url_links(newtext,parser)
+                newtext = fix_meta_image_links(newtext,parser)
                 with open(filepath, 'w') as f:
                     f.write(newtext)
 
@@ -95,9 +177,12 @@ def main():
         os.chdir(static_path)
 
         Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
-        httpd = SocketServer.TCPServer(("", 9000), Handler)
+        port = arguments.get('--port')
+        if not port:
+            port = 9000
+        httpd = SocketServer.TCPServer(("",int(port)), Handler)
 
-        print "Serving at port 9000"
+        print "Serving at port {}".format(port)
         # gracefully handle interrupt here
         httpd.serve_forever()
 
